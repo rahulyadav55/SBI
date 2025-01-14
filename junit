@@ -1,0 +1,180 @@
+package com.epay.merchant.validator;
+
+import com.epay.merchant.dao.MerchantInfoDao;
+import com.epay.merchant.model.request.APIKeyValidationRequest;
+import com.epay.merchant.model.request.KeyGenerationRequest;
+import com.epay.merchant.util.ErrorConstants;
+import com.epay.merchant.util.enums.MerchantStatus;
+import lombok.RequiredArgsConstructor;
+import org.springframework.stereotype.Component;
+
+import java.text.MessageFormat;
+import java.util.ArrayList;
+
+@RequiredArgsConstructor
+@Component
+public class KeyValidator extends BaseValidator {
+
+    private final MerchantInfoDao merchantInfoDao;
+
+    public void validateKeyGenerationRequest(KeyGenerationRequest keyGenerationRequest) {
+        errorDtoList = new ArrayList<>();
+        validatedMandatoryField(keyGenerationRequest);
+        validateMId(keyGenerationRequest.getMId());
+    }
+
+    public void validateAPIKeyValidationRequest(APIKeyValidationRequest apiKeyValidationRequest) {
+        errorDtoList = new ArrayList<>();
+        validatedMandatoryField(apiKeyValidationRequest);
+    }
+
+    public void validateMId(String mId) {
+        errorDtoList = new ArrayList<>();
+        boolean existsByMIdAndStatus = merchantInfoDao.isExistsByMIdAndStatus(mId, MerchantStatus.ACTIVE.name());
+        if (!existsByMIdAndStatus) {
+            addError(ErrorConstants.NOT_FOUND_ERROR_CODE, MessageFormat.format(ErrorConstants.NOT_FOUND_ERROR_MESSAGE, "Valid MID"));
+        }
+        throwIfErrors();
+    }
+
+    private void validatedMandatoryField(KeyGenerationRequest keyGenerationRequest) {
+        checkMandatoryField(keyGenerationRequest.getMId(), "MId");
+        throwIfErrors();
+    }
+
+    private void validatedMandatoryField(APIKeyValidationRequest apiKeyValidationRequest) {
+        checkMandatoryField(apiKeyValidationRequest.getApiKey(), "ApiKey");
+        checkMandatoryField(apiKeyValidationRequest.getApiKeySecret(), "ApiKeySecret");
+        throwIfErrors();
+    }
+}
+
+
+package com.epay.merchant.validator;
+
+import com.epay.merchant.dto.ErrorDto;
+import com.epay.merchant.exception.ValidationException;
+import com.epay.merchant.util.ErrorConstants;
+import com.epay.merchant.util.MerchantConstant;
+import org.apache.commons.collections4.CollectionUtils;
+import org.apache.commons.lang3.ObjectUtils;
+import org.apache.commons.lang3.StringUtils;
+
+import java.text.MessageFormat;
+import java.util.*;
+import java.util.regex.Pattern;
+
+import static com.epay.merchant.util.ErrorConstants.INVALID_ERROR_CODE;
+import static com.epay.merchant.util.ErrorConstants.INVALID_ERROR_MESSAGE;
+
+/**
+ * Class Name:BaseValidator
+ * *
+ * Description:
+ * *
+ * Author: Bhoopendra Rajput
+ * <p>
+ * Copyright (c) 2024 [State Bank of India]
+ * All right reserved
+ * *
+ * Version:1.0
+ */
+
+public class BaseValidator {
+
+    List<ErrorDto> errorDtoList;
+
+    void checkMandatoryField(String value, String fieldName) {
+        if (StringUtils.isEmpty(value)) {
+            addError(fieldName, ErrorConstants.MANDATORY_ERROR_CODE, ErrorConstants.MANDATORY_ERROR_MESSAGE);
+        }
+    }
+
+    void checkMandatoryField(UUID value, String fieldName) {
+        if (ObjectUtils.isEmpty(value)) {
+            addError(fieldName, ErrorConstants.MANDATORY_ERROR_CODE, ErrorConstants.MANDATORY_ERROR_MESSAGE);
+        }
+    }
+
+    void checkMandatoryCollection(Collection collection, String fieldName) {
+        if (CollectionUtils.isEmpty(collection)) {
+            addError(fieldName, ErrorConstants.MANDATORY_ERROR_CODE, ErrorConstants.MANDATORY_ERROR_MESSAGE);
+        }
+    }
+
+    void checkMandatoryFields(String fieldName, String... values) {
+        boolean allEmpty = Arrays.stream(values).allMatch(StringUtils::isEmpty);
+        if (allEmpty) {
+            addError(fieldName, ErrorConstants.MANDATORY_ERROR_CODE, ErrorConstants.MANDATORY_ERROR_MESSAGE);
+        }
+    }
+
+    void checkMandatoryDateField(Long date, String fieldName) {
+        if (ObjectUtils.isEmpty(date) || date < 0) {
+            addError(fieldName, ErrorConstants.MANDATORY_ERROR_CODE, ErrorConstants.MANDATORY_ERROR_MESSAGE);
+        }
+    }
+
+    void validateFieldLength(String value, int maxLength, String fieldName) {
+        if (StringUtils.isNotEmpty(value) && value.length() > maxLength) {
+            addError(fieldName, ErrorConstants.INVALID_ERROR_CODE, "Max allowed length is " + maxLength);
+        }
+    }
+
+    void validateDateFieldForPastDate(Long date, String fieldName) {
+        if (date < MerchantConstant.MIN_TIMESTAMP || System.currentTimeMillis() < date) {
+            addError(ErrorConstants.INVALID_ERROR_CODE, ErrorConstants.INVALID_ERROR_MESSAGE, fieldName, "Given date is greater then current date or not having format");
+        }
+    }
+
+    void validateDateFieldForFutureDate(Long date, String fieldName) {
+        if (date > MerchantConstant.MAX_TIMESTAMP || System.currentTimeMillis() > date) {
+            addError(ErrorConstants.INVALID_ERROR_CODE, ErrorConstants.INVALID_ERROR_MESSAGE, fieldName, "Given date is less then current date or not having format");
+        }
+    }
+
+    void validateFieldWithRegex(String value, int maxLength, String regex, String fieldName, String message) {
+        if (StringUtils.isNotEmpty(value) && (value.length() > maxLength || validate(value, regex))) {
+            addError(fieldName, ErrorConstants.INVALID_ERROR_CODE, message + " " + maxLength);
+        }
+    }
+
+    void validateFieldWithRegex(String value, String regex, String fieldName, String message) {
+        if (StringUtils.isNotEmpty(value) && validate(value, regex)) {
+            addError(fieldName, ErrorConstants.INVALID_ERROR_CODE, MessageFormat.format(message, fieldName, value));
+        }
+    }
+
+    void validateFieldValue(String value, String validValue, String fieldName) {
+        if (!validValue.equalsIgnoreCase(value)) {
+            addError(INVALID_ERROR_CODE, INVALID_ERROR_MESSAGE, fieldName, "Valid Values are " + validValue);
+        }
+    }
+
+    void validateFieldValue(String value, List<String> validValues, String fieldName) {
+        boolean isValid = validValues.stream().anyMatch(validValue -> validValue.equalsIgnoreCase(value));
+        if (!isValid) {
+            addError(INVALID_ERROR_CODE, INVALID_ERROR_MESSAGE, fieldName, "Valid Values are " + validValues);
+        }
+
+    }
+
+    void addError(String fieldName, String errorCode, String errorMessage) {
+        errorDtoList.add(ErrorDto.builder().errorCode(errorCode).errorMessage(MessageFormat.format(errorMessage, fieldName)).build());
+    }
+
+
+    void addError(String errorCode, String errorMessage, Object... fieldNames) {
+        errorDtoList.add(ErrorDto.builder().errorCode(errorCode).errorMessage(MessageFormat.format(errorMessage, fieldNames)).build());
+    }
+
+    void throwIfErrors() {
+        if (!errorDtoList.isEmpty()) {
+            throw new ValidationException(new ArrayList<>(errorDtoList));
+        }
+    }
+
+    boolean validate(String value, String regex) {
+        return !Pattern.matches(regex, value);
+    }
+}
