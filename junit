@@ -178,3 +178,122 @@ public class BaseValidator {
         return !Pattern.matches(regex, value);
     }
 }
+
+
+
+
+import com.epay.merchant.dao.MerchantInfoDao;
+import com.epay.merchant.exception.ValidationException;
+import com.epay.merchant.model.request.APIKeyValidationRequest;
+import com.epay.merchant.model.request.KeyGenerationRequest;
+import com.epay.merchant.util.enums.MerchantStatus;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.mockito.Mockito;
+
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.Mockito.*;
+
+class KeyValidatorTest {
+
+    private KeyValidator keyValidator;
+    private MerchantInfoDao merchantInfoDao;
+
+    @BeforeEach
+    void setUp() {
+        merchantInfoDao = mock(MerchantInfoDao.class);
+        keyValidator = new KeyValidator(merchantInfoDao);
+    }
+
+    @Test
+    void validateKeyGenerationRequest_ValidRequest() {
+        // Arrange
+        KeyGenerationRequest request = new KeyGenerationRequest();
+        request.setMId("validMID");
+
+        when(merchantInfoDao.isExistsByMIdAndStatus("validMID", MerchantStatus.ACTIVE.name()))
+                .thenReturn(true);
+
+        // Act
+        keyValidator.validateKeyGenerationRequest(request);
+
+        // Assert
+        verify(merchantInfoDao, times(1)).isExistsByMIdAndStatus("validMID", MerchantStatus.ACTIVE.name());
+    }
+
+    @Test
+    void validateKeyGenerationRequest_InvalidMId() {
+        // Arrange
+        KeyGenerationRequest request = new KeyGenerationRequest();
+        request.setMId("invalidMID");
+
+        when(merchantInfoDao.isExistsByMIdAndStatus("invalidMID", MerchantStatus.ACTIVE.name()))
+                .thenReturn(false);
+
+        // Act & Assert
+        ValidationException exception = assertThrows(ValidationException.class, () -> {
+            keyValidator.validateKeyGenerationRequest(request);
+        });
+
+        verify(merchantInfoDao, times(1)).isExistsByMIdAndStatus("invalidMID", MerchantStatus.ACTIVE.name());
+        assert (exception.getErrors().stream().anyMatch(error -> error.getErrorMessage().contains("Valid MID")));
+    }
+
+    @Test
+    void validateAPIKeyValidationRequest_ValidRequest() {
+        // Arrange
+        APIKeyValidationRequest request = new APIKeyValidationRequest();
+        request.setApiKey("validApiKey");
+        request.setApiKeySecret("validApiKeySecret");
+
+        // Act
+        keyValidator.validateAPIKeyValidationRequest(request);
+
+        // Assert
+        // No exception means the test passes
+    }
+
+    @Test
+    void validateAPIKeyValidationRequest_MissingFields() {
+        // Arrange
+        APIKeyValidationRequest request = new APIKeyValidationRequest();
+
+        // Act & Assert
+        ValidationException exception = assertThrows(ValidationException.class, () -> {
+            keyValidator.validateAPIKeyValidationRequest(request);
+        });
+
+        assert (exception.getErrors().stream().anyMatch(error -> error.getErrorMessage().contains("ApiKey")));
+        assert (exception.getErrors().stream().anyMatch(error -> error.getErrorMessage().contains("ApiKeySecret")));
+    }
+
+    @Test
+    void validateMId_Valid() {
+        // Arrange
+        String validMId = "validMID";
+        when(merchantInfoDao.isExistsByMIdAndStatus(validMId, MerchantStatus.ACTIVE.name()))
+                .thenReturn(true);
+
+        // Act
+        keyValidator.validateMId(validMId);
+
+        // Assert
+        verify(merchantInfoDao, times(1)).isExistsByMIdAndStatus(validMId, MerchantStatus.ACTIVE.name());
+    }
+
+    @Test
+    void validateMId_Invalid() {
+        // Arrange
+        String invalidMId = "invalidMID";
+        when(merchantInfoDao.isExistsByMIdAndStatus(invalidMId, MerchantStatus.ACTIVE.name()))
+                .thenReturn(false);
+
+        // Act & Assert
+        ValidationException exception = assertThrows(ValidationException.class, () -> {
+            keyValidator.validateMId(invalidMId);
+        });
+
+        verify(merchantInfoDao, times(1)).isExistsByMIdAndStatus(invalidMId, MerchantStatus.ACTIVE.name());
+        assert (exception.getErrors().stream().anyMatch(error -> error.getErrorMessage().contains("Valid MID")));
+    }
+}
