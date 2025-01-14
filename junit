@@ -1,299 +1,121 @@
-package com.epay.merchant.validator;
+package com.epay.merchant.dao;
 
-import com.epay.merchant.dao.MerchantInfoDao;
+import com.epay.merchant.config.MerchantConfig;
+import com.epay.merchant.dto.ErrorDto;
+import com.epay.merchant.dto.MerchantEmailDto;
+import com.epay.merchant.entity.KeyManagement;
+import com.epay.merchant.entity.MerchantInfo;
+import com.epay.merchant.entity.NotificationManagement;
+import com.epay.merchant.exception.MerchantException;
+import com.epay.merchant.exception.ValidationException;
+import com.epay.merchant.externalservice.KmsClient;
+import com.epay.merchant.externalservice.response.KMSAPIKeysResponse;
+import com.epay.merchant.externalservice.response.KMSEncryptionKeysResponse;
+import com.epay.merchant.externalservice.response.KMSKeyResponse;
 import com.epay.merchant.model.request.APIKeyValidationRequest;
 import com.epay.merchant.model.request.KeyGenerationRequest;
+import com.epay.merchant.model.response.MerchantResponse;
+import com.epay.merchant.repository.KeyRepository;
+import com.epay.merchant.util.EmailUtil;
 import com.epay.merchant.util.ErrorConstants;
+import com.epay.merchant.util.MerchantConstant;
+import com.epay.merchant.util.enums.EMailType;
+import com.epay.merchant.util.enums.KeyType;
 import com.epay.merchant.util.enums.MerchantStatus;
+import com.epay.merchant.util.enums.NotificationEntityType;
+import com.sbi.epay.logging.utility.LoggerFactoryUtility;
+import com.sbi.epay.logging.utility.LoggerUtility;
 import lombok.RequiredArgsConstructor;
+import org.apache.commons.collections4.CollectionUtils;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Component;
 
 import java.text.MessageFormat;
-import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.UUID;
 
-@RequiredArgsConstructor
 @Component
-public class KeyValidator extends BaseValidator {
-
+@RequiredArgsConstructor
+public class KeyDao {
+    private final LoggerUtility log = LoggerFactoryUtility.getLogger(this.getClass());
+    private final KmsClient kmsClient;
+    private final KeyRepository keyRepository;
+    private final MerchantConfig merchantConfig;
+    private final NotificationDao notificationDao;
     private final MerchantInfoDao merchantInfoDao;
 
-    public void validateKeyGenerationRequest(KeyGenerationRequest keyGenerationRequest) {
-        errorDtoList = new ArrayList<>();
-        validatedMandatoryField(keyGenerationRequest);
-        validateMId(keyGenerationRequest.getMId());
-    }
-
-    public void validateAPIKeyValidationRequest(APIKeyValidationRequest apiKeyValidationRequest) {
-        errorDtoList = new ArrayList<>();
-        validatedMandatoryField(apiKeyValidationRequest);
-    }
-
-    public void validateMId(String mId) {
-        errorDtoList = new ArrayList<>();
-        boolean existsByMIdAndStatus = merchantInfoDao.isExistsByMIdAndStatus(mId, MerchantStatus.ACTIVE.name());
-        if (!existsByMIdAndStatus) {
-            addError(ErrorConstants.NOT_FOUND_ERROR_CODE, MessageFormat.format(ErrorConstants.NOT_FOUND_ERROR_MESSAGE, "Valid MID"));
-        }
-        throwIfErrors();
-    }
-
-    private void validatedMandatoryField(KeyGenerationRequest keyGenerationRequest) {
-        checkMandatoryField(keyGenerationRequest.getMId(), "MId");
-        throwIfErrors();
-    }
-
-    private void validatedMandatoryField(APIKeyValidationRequest apiKeyValidationRequest) {
-        checkMandatoryField(apiKeyValidationRequest.getApiKey(), "ApiKey");
-        checkMandatoryField(apiKeyValidationRequest.getApiKeySecret(), "ApiKeySecret");
-        throwIfErrors();
-    }
-}
-
-
-package com.epay.merchant.validator;
-
-import com.epay.merchant.dto.ErrorDto;
-import com.epay.merchant.exception.ValidationException;
-import com.epay.merchant.util.ErrorConstants;
-import com.epay.merchant.util.MerchantConstant;
-import org.apache.commons.collections4.CollectionUtils;
-import org.apache.commons.lang3.ObjectUtils;
-import org.apache.commons.lang3.StringUtils;
-
-import java.text.MessageFormat;
-import java.util.*;
-import java.util.regex.Pattern;
-
-import static com.epay.merchant.util.ErrorConstants.INVALID_ERROR_CODE;
-import static com.epay.merchant.util.ErrorConstants.INVALID_ERROR_MESSAGE;
-
-/**
- * Class Name:BaseValidator
- * *
- * Description:
- * *
- * Author: Bhoopendra Rajput
- * <p>
- * Copyright (c) 2024 [State Bank of India]
- * All right reserved
- * *
- * Version:1.0
- */
-
-public class BaseValidator {
-
-    List<ErrorDto> errorDtoList;
-
-    void checkMandatoryField(String value, String fieldName) {
-        if (StringUtils.isEmpty(value)) {
-            addError(fieldName, ErrorConstants.MANDATORY_ERROR_CODE, ErrorConstants.MANDATORY_ERROR_MESSAGE);
+    public KMSAPIKeysResponse generateApiKey(String mId) {
+        try {
+            MerchantResponse<KMSAPIKeysResponse> kmsResponse = kmsClient.generateAPIKeys(mId, merchantConfig.getApiKeyExpiryTime());
+            if (kmsResponse.getStatus() == MerchantConstant.RESPONSE_SUCCESS && CollectionUtils.isNotEmpty(kmsResponse.getData())) {
+                UUID keyId = saveKey(mId, KeyType.API, MerchantConstant.RESPONSE_SUCCESS, "API Key Generated");
+                KMSAPIKeysResponse kmsapiKeysResponse = kmsResponse.getData().getFirst();
+                kmsapiKeysResponse.setId(keyId);
+                return kmsapiKeysResponse;
+            } else if (kmsResponse.getStatus() == MerchantConstant.RESPONSE_FAILURE) {
+                saveKey(mId, KeyType.API, MerchantConstant.RESPONSE_FAILURE, Arrays.toString(kmsResponse.getErrors().toArray(new ErrorDto[0])));
+                throw new ValidationException(kmsResponse.getErrors());
+            }
+            saveKey(mId, KeyType.API, MerchantConstant.RESPONSE_FAILURE, "Error in API Key Generated");
+            throw new MerchantException(ErrorConstants.GENERATION_ERROR_CODE, MessageFormat.format(ErrorConstants.GENERATION_ERROR_MESSAGE, "API Key"));
+        } catch (Exception e) {
+            log.error("Error in API Key Generation : ", e);
+            saveKey(mId, KeyType.API, MerchantConstant.RESPONSE_FAILURE, "Error in API Key Generated : " + e.getMessage());
+            throw new MerchantException(ErrorConstants.GENERATION_ERROR_CODE, MessageFormat.format(ErrorConstants.GENERATION_ERROR_MESSAGE, "API Key"));
         }
     }
 
-    void checkMandatoryField(UUID value, String fieldName) {
-        if (ObjectUtils.isEmpty(value)) {
-            addError(fieldName, ErrorConstants.MANDATORY_ERROR_CODE, ErrorConstants.MANDATORY_ERROR_MESSAGE);
+    public KMSEncryptionKeysResponse generateEncryptionKey(KeyGenerationRequest keyGenerationRequest) {
+        try {
+            MerchantResponse<String> kmsResponse = kmsClient.generateEncryptionKeys(keyGenerationRequest.getMId(), keyGenerationRequest.getOldKeyExpiryInHr(), merchantConfig.getEncryptionKeyExpiryTime());
+            if (MerchantConstant.RESPONSE_SUCCESS == kmsResponse.getStatus() && CollectionUtils.isNotEmpty(kmsResponse.getData())) {
+                UUID keyId = saveKey(keyGenerationRequest.getMId(), KeyType.ENCRYPTION, MerchantConstant.RESPONSE_SUCCESS, "Encryption Key Generated");
+                return KMSEncryptionKeysResponse.builder().id(keyId).mek(kmsResponse.getData().getFirst()).build();
+            } else if (kmsResponse.getStatus() == MerchantConstant.RESPONSE_FAILURE) {
+                saveKey(keyGenerationRequest.getMId(), KeyType.ENCRYPTION, MerchantConstant.RESPONSE_FAILURE, Arrays.toString(kmsResponse.getErrors().toArray(new ErrorDto[0])));
+                throw new ValidationException(kmsResponse.getErrors());
+            }
+            saveKey(keyGenerationRequest.getMId(), KeyType.ENCRYPTION, MerchantConstant.RESPONSE_FAILURE, "Error in Encryption Key Generated");
+            throw new MerchantException(ErrorConstants.GENERATION_ERROR_CODE, MessageFormat.format(ErrorConstants.GENERATION_ERROR_MESSAGE, "API Key"));
+        } catch (Exception e) {
+            log.error("Error in Encryption Key Generation : ", e);
+            saveKey(keyGenerationRequest.getMId(), KeyType.ENCRYPTION, MerchantConstant.RESPONSE_FAILURE, "Error in Encryption Key Generated : " + e.getMessage());
+            throw new MerchantException(ErrorConstants.GENERATION_ERROR_CODE, MessageFormat.format(ErrorConstants.GENERATION_ERROR_MESSAGE, "API Key"));
         }
     }
 
-    void checkMandatoryCollection(Collection collection, String fieldName) {
-        if (CollectionUtils.isEmpty(collection)) {
-            addError(fieldName, ErrorConstants.MANDATORY_ERROR_CODE, ErrorConstants.MANDATORY_ERROR_MESSAGE);
+    public void saveNotification(KeyType keyType, UUID entityId, String content, String mId) {
+        NotificationManagement notificationMgmt = NotificationManagement.builder().requestType(keyType.name()).entityId(entityId).entityName(NotificationEntityType.KEY_MANAGEMENT).build();
+        MerchantInfo merchant = merchantInfoDao.getMerchantByMIdAndStatus(mId, MerchantStatus.ACTIVE.name());
+        MerchantEmailDto merchantEmailDto = MerchantEmailDto.builder().toEmail(merchant.getPrimaryEmail()).content(EmailUtil.generateDefaultContent(content)).eMailType(EMailType.KEY_GENERATION).build();
+        notificationDao.sendEmailNotification(merchantEmailDto, notificationMgmt);
+    }
+
+
+    public MerchantResponse<String> validatedAPIKey(APIKeyValidationRequest apiKeyValidationRequest) {
+        MerchantResponse<String> kmsResponse = kmsClient.validatedMerchantKeys(apiKeyValidationRequest);
+        if (MerchantConstant.RESPONSE_SUCCESS == kmsResponse.getStatus() && CollectionUtils.isNotEmpty(kmsResponse.getData())) {
+            String mId = kmsResponse.getData().getFirst();
+            boolean isMIdExist = merchantInfoDao.isExistsByMIdAndStatus(mId, MerchantStatus.ACTIVE.name());
+            if (isMIdExist) {
+                return kmsResponse;
+            }
+            throw new MerchantException(ErrorConstants.INVALID_ERROR_CODE, MessageFormat.format(ErrorConstants.INVALID_ERROR_MESSAGE, "Merchant", "MId : " + mId + " is not active."));
         }
+        return kmsResponse;
     }
 
-    void checkMandatoryFields(String fieldName, String... values) {
-        boolean allEmpty = Arrays.stream(values).allMatch(StringUtils::isEmpty);
-        if (allEmpty) {
-            addError(fieldName, ErrorConstants.MANDATORY_ERROR_CODE, ErrorConstants.MANDATORY_ERROR_MESSAGE);
-        }
+    public MerchantResponse<KMSEncryptionKeysResponse> getMerchantEncryptionKeys(String mId) {
+        return kmsClient.getEncryptionKeys(mId);
     }
 
-    void checkMandatoryDateField(Long date, String fieldName) {
-        if (ObjectUtils.isEmpty(date) || date < 0) {
-            addError(fieldName, ErrorConstants.MANDATORY_ERROR_CODE, ErrorConstants.MANDATORY_ERROR_MESSAGE);
-        }
+    public MerchantResponse<KMSKeyResponse> getKeysByMerchant(KeyType keyType, String mId, Pageable pageable) {
+        return kmsClient.getKeysByMerchant(keyType, mId, pageable);
     }
 
-    void validateFieldLength(String value, int maxLength, String fieldName) {
-        if (StringUtils.isNotEmpty(value) && value.length() > maxLength) {
-            addError(fieldName, ErrorConstants.INVALID_ERROR_CODE, "Max allowed length is " + maxLength);
-        }
+    private UUID saveKey(String mid, KeyType keyType, int status, String remark) {
+        KeyManagement keyManagement = KeyManagement.builder().mid(mid).keyType(keyType).status(status == 1).remarks(remark).build();
+        return keyRepository.save(keyManagement).getId();
     }
 
-    void validateDateFieldForPastDate(Long date, String fieldName) {
-        if (date < MerchantConstant.MIN_TIMESTAMP || System.currentTimeMillis() < date) {
-            addError(ErrorConstants.INVALID_ERROR_CODE, ErrorConstants.INVALID_ERROR_MESSAGE, fieldName, "Given date is greater then current date or not having format");
-        }
-    }
-
-    void validateDateFieldForFutureDate(Long date, String fieldName) {
-        if (date > MerchantConstant.MAX_TIMESTAMP || System.currentTimeMillis() > date) {
-            addError(ErrorConstants.INVALID_ERROR_CODE, ErrorConstants.INVALID_ERROR_MESSAGE, fieldName, "Given date is less then current date or not having format");
-        }
-    }
-
-    void validateFieldWithRegex(String value, int maxLength, String regex, String fieldName, String message) {
-        if (StringUtils.isNotEmpty(value) && (value.length() > maxLength || validate(value, regex))) {
-            addError(fieldName, ErrorConstants.INVALID_ERROR_CODE, message + " " + maxLength);
-        }
-    }
-
-    void validateFieldWithRegex(String value, String regex, String fieldName, String message) {
-        if (StringUtils.isNotEmpty(value) && validate(value, regex)) {
-            addError(fieldName, ErrorConstants.INVALID_ERROR_CODE, MessageFormat.format(message, fieldName, value));
-        }
-    }
-
-    void validateFieldValue(String value, String validValue, String fieldName) {
-        if (!validValue.equalsIgnoreCase(value)) {
-            addError(INVALID_ERROR_CODE, INVALID_ERROR_MESSAGE, fieldName, "Valid Values are " + validValue);
-        }
-    }
-
-    void validateFieldValue(String value, List<String> validValues, String fieldName) {
-        boolean isValid = validValues.stream().anyMatch(validValue -> validValue.equalsIgnoreCase(value));
-        if (!isValid) {
-            addError(INVALID_ERROR_CODE, INVALID_ERROR_MESSAGE, fieldName, "Valid Values are " + validValues);
-        }
-
-    }
-
-    void addError(String fieldName, String errorCode, String errorMessage) {
-        errorDtoList.add(ErrorDto.builder().errorCode(errorCode).errorMessage(MessageFormat.format(errorMessage, fieldName)).build());
-    }
-
-
-    void addError(String errorCode, String errorMessage, Object... fieldNames) {
-        errorDtoList.add(ErrorDto.builder().errorCode(errorCode).errorMessage(MessageFormat.format(errorMessage, fieldNames)).build());
-    }
-
-    void throwIfErrors() {
-        if (!errorDtoList.isEmpty()) {
-            throw new ValidationException(new ArrayList<>(errorDtoList));
-        }
-    }
-
-    boolean validate(String value, String regex) {
-        return !Pattern.matches(regex, value);
-    }
-}
-
-
-
-
-import com.epay.merchant.dao.MerchantInfoDao;
-import com.epay.merchant.exception.ValidationException;
-import com.epay.merchant.model.request.APIKeyValidationRequest;
-import com.epay.merchant.model.request.KeyGenerationRequest;
-import com.epay.merchant.util.enums.MerchantStatus;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-import org.mockito.Mockito;
-
-import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.mockito.Mockito.*;
-
-class KeyValidatorTest {
-
-    private KeyValidator keyValidator;
-    private MerchantInfoDao merchantInfoDao;
-
-    @BeforeEach
-    void setUp() {
-        merchantInfoDao = mock(MerchantInfoDao.class);
-        keyValidator = new KeyValidator(merchantInfoDao);
-    }
-
-    @Test
-    void validateKeyGenerationRequest_ValidRequest() {
-        // Arrange
-        KeyGenerationRequest request = new KeyGenerationRequest();
-        request.setMId("validMID");
-
-        when(merchantInfoDao.isExistsByMIdAndStatus("validMID", MerchantStatus.ACTIVE.name()))
-                .thenReturn(true);
-
-        // Act
-        keyValidator.validateKeyGenerationRequest(request);
-
-        // Assert
-        verify(merchantInfoDao, times(1)).isExistsByMIdAndStatus("validMID", MerchantStatus.ACTIVE.name());
-    }
-
-    @Test
-    void validateKeyGenerationRequest_InvalidMId() {
-        // Arrange
-        KeyGenerationRequest request = new KeyGenerationRequest();
-        request.setMId("invalidMID");
-
-        when(merchantInfoDao.isExistsByMIdAndStatus("invalidMID", MerchantStatus.ACTIVE.name()))
-                .thenReturn(false);
-
-        // Act & Assert
-        ValidationException exception = assertThrows(ValidationException.class, () -> {
-            keyValidator.validateKeyGenerationRequest(request);
-        });
-
-        verify(merchantInfoDao, times(1)).isExistsByMIdAndStatus("invalidMID", MerchantStatus.ACTIVE.name());
-        assert (exception.getErrors().stream().anyMatch(error -> error.getErrorMessage().contains("Valid MID")));
-    }
-
-    @Test
-    void validateAPIKeyValidationRequest_ValidRequest() {
-        // Arrange
-        APIKeyValidationRequest request = new APIKeyValidationRequest();
-        request.setApiKey("validApiKey");
-        request.setApiKeySecret("validApiKeySecret");
-
-        // Act
-        keyValidator.validateAPIKeyValidationRequest(request);
-
-        // Assert
-        // No exception means the test passes
-    }
-
-    @Test
-    void validateAPIKeyValidationRequest_MissingFields() {
-        // Arrange
-        APIKeyValidationRequest request = new APIKeyValidationRequest();
-
-        // Act & Assert
-        ValidationException exception = assertThrows(ValidationException.class, () -> {
-            keyValidator.validateAPIKeyValidationRequest(request);
-        });
-
-        assert (exception.getErrors().stream().anyMatch(error -> error.getErrorMessage().contains("ApiKey")));
-        assert (exception.getErrors().stream().anyMatch(error -> error.getErrorMessage().contains("ApiKeySecret")));
-    }
-
-    @Test
-    void validateMId_Valid() {
-        // Arrange
-        String validMId = "validMID";
-        when(merchantInfoDao.isExistsByMIdAndStatus(validMId, MerchantStatus.ACTIVE.name()))
-                .thenReturn(true);
-
-        // Act
-        keyValidator.validateMId(validMId);
-
-        // Assert
-        verify(merchantInfoDao, times(1)).isExistsByMIdAndStatus(validMId, MerchantStatus.ACTIVE.name());
-    }
-
-    @Test
-    void validateMId_Invalid() {
-        // Arrange
-        String invalidMId = "invalidMID";
-        when(merchantInfoDao.isExistsByMIdAndStatus(invalidMId, MerchantStatus.ACTIVE.name()))
-                .thenReturn(false);
-
-        // Act & Assert
-        ValidationException exception = assertThrows(ValidationException.class, () -> {
-            keyValidator.validateMId(invalidMId);
-        });
-
-        verify(merchantInfoDao, times(1)).isExistsByMIdAndStatus(invalidMId, MerchantStatus.ACTIVE.name());
-        assert (exception.getErrors().stream().anyMatch(error -> error.getErrorMessage().contains("Valid MID")));
-    }
 }
